@@ -36,6 +36,7 @@ public:
 		UPDATE_ELEMENT(ID_VIEW_DOTNET, UPDUI_MENUPOPUP | UPDUI_TOOLBAR)
 		UPDATE_ELEMENT(ID_OPTIONS_ALWAYSONTOP, UPDUI_MENUPOPUP)
 		UPDATE_ELEMENT(ID_OBJECT_VIEWDATA, UPDUI_MENUPOPUP | UPDUI_TOOLBAR)
+		UPDATE_ELEMENT(ID_WINDOW_CLOSE, UPDUI_MENUPOPUP | UPDUI_TOOLBAR)
 	END_UPDATE_UI_MAP()
 	 
 	BEGIN_MSG_MAP(CMainFrame)
@@ -54,7 +55,7 @@ public:
 		COMMAND_ID_HANDLER(ID_WINDOW_NEW, OnNewWindow)
 		COMMAND_RANGE_HANDLER(ID_VIEW_SUMMARY, ID_VIEW_DOTNET, OnViewDataItem)
 		COMMAND_RANGE_HANDLER(ID_WINDOW_TABFIRST, ID_WINDOW_TABLAST, OnWindowActivate)
-		COMMAND_RANGE_HANDLER(ID_FILE_RECENTFILES, ID_FILE_RECENTFILES + 9, OnRecentFile)
+		COMMAND_RANGE_HANDLER(ATL_IDS_MRU_FILE, ATL_IDS_MRU_FILE + 15, OnRecentFile)
 		MESSAGE_HANDLER(WM_DROPFILES, OnDropFiles)
 		NOTIFY_HANDLER(IDC_TREE, NM_DBLCLK, OnTreeItemDoubleClick)
 		CHAIN_MSG_MAP(CUpdateUI<CMainFrame>)
@@ -72,7 +73,7 @@ private:
 	void UpdateUI();
 	void CreateNewTab(TreeNodeType type);
 	bool SwitchToTab(TreeNodeType type);
-	void DoFileOpen(PCWSTR path, bool newWindow = false);
+	bool DoFileOpen(PCWSTR path, bool newWindow = false);
 	void AddRecentFiles(bool first = false);
 	void AddToRecentFiles(PCWSTR file);
 	bool SaveSettings();
@@ -86,6 +87,8 @@ private:
 	UINT ShowContextMenu(HMENU menu, const POINT& pt, DWORD flags) override;
 	CTreeItem CreateHexView(TreeNodeType type, PCWSTR title, LPARAM param) override;
 	CTreeItem CreateAssemblyView(const ExportedSymbol& symbol) override;
+	bool OpenDocument(PCWSTR name, bool newWindow) override;
+	CTreeItem CreateTypeMembersView(const ManagedType& type) override;
 
 	LRESULT OnCreate(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/, BOOL& /*bHandled*/);
 	LRESULT OnDestroy(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/, BOOL& bHandled);
@@ -114,7 +117,7 @@ private:
 	CCommandBarCtrl m_CmdBar;
 	std::unique_ptr<PEParser> m_Parser;
 	CString m_FileName, m_FilePath;
-	std::unordered_map<int, CTreeItem> m_TreeNodes;
+	std::unordered_map<size_t, CTreeItem> m_TreeNodes;
 	static int m_TotalFrames;
 
 };

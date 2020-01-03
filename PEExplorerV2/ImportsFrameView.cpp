@@ -3,8 +3,8 @@
 
 const DWORD ListViewDefaultStyle = WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 
-CImportsFrameView::CImportsFrameView(PEParser* parser)
-	: m_Parser(parser), m_libViewImpl(parser), m_libView(&m_libViewImpl),
+CImportsFrameView::CImportsFrameView(PEParser* parser, IMainFrame* frame)
+	: m_Parser(parser), m_libViewImpl(parser, frame), m_libView(&m_libViewImpl),
 	m_importsView(&m_importsImpl) {
 }
 
@@ -12,10 +12,8 @@ LRESULT CImportsFrameView::OnCreate(UINT, WPARAM, LPARAM, BOOL&) {
 	m_splitter.Create(m_hWnd, rcDefault, nullptr, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN);
 
 	m_libView.Create(m_splitter, rcDefault, nullptr, ListViewDefaultStyle | LVS_SINGLESEL, WS_EX_CLIENTEDGE, IDC_LIBS);
-	m_libViewImpl.Init(m_libView);
 
 	m_importsView.Create(m_splitter, rcDefault, nullptr, ListViewDefaultStyle, WS_EX_CLIENTEDGE);
-	m_importsImpl.Init(m_importsView);
 
 	m_splitter.SetSplitterPanes(m_libView, m_importsView);
 	m_splitter.SetSplitterPosPct(33);

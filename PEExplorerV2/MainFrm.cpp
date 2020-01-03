@@ -22,6 +22,8 @@
 #include "Capstone/capstone.h"
 #include "AssemblyView.h"
 #include "ManagedTypesView.h"
+#include "TypeMembersView.h"
+#include "CLRMetadataParser.h"
 
 #pragma comment(lib, "capstone/capstone.lib")
 
@@ -99,7 +101,6 @@ void CMainFrame::CreateNewTab(TreeNodeType type) {
 			auto view = new SummaryView(m_Parser.get());
 			auto summary = new CGenericListView(view, true);
 			summary->Create(m_view, nullptr, nullptr, ListViewDefaultStyle);
-			view->Init(*summary);
 			m_view.AddPage(*summary, L"Summary", 0, (PVOID)type);
 			break;
 		}
@@ -109,14 +110,13 @@ void CMainFrame::CreateNewTab(TreeNodeType type) {
 			auto view = new ExportsView(m_Parser.get(), this);
 			auto lv = new CGenericListView(view, true);
 			lv->Create(m_view, nullptr, nullptr, ListViewDefaultStyle);
-			view->Init(*lv);
 			m_view.AddPage(*lv, L"Exports", 3, (PVOID)type);
 			break;
 		}
 
 		case TreeNodeType::Imports:
 		{
-			auto view = new CImportsFrameView(m_Parser.get());
+			auto view = new CImportsFrameView(m_Parser.get(), this);
 			view->Create(m_view, rcDefault, nullptr, WS_CHILD | WS_VISIBLE);
 			m_view.AddPage(*view, L"Imports", 4, (PVOID)type);
 			break;
@@ -127,7 +127,6 @@ void CMainFrame::CreateNewTab(TreeNodeType type) {
 			auto view = new SectionsView(m_Parser.get(), this);
 			auto lv = new CGenericListView(view, true);
 			lv->Create(m_view, nullptr, nullptr, ListViewDefaultStyle);
-			view->Init(*lv);
 			m_view.AddPage(*lv, L"Sections", 1, (PVOID)type);
 			break;
 		}
@@ -137,7 +136,6 @@ void CMainFrame::CreateNewTab(TreeNodeType type) {
 			auto view = new DataDirectoriesView(m_Parser.get(), this);
 			auto lv = new CGenericListView(view, true);
 			lv->Create(m_view, nullptr, nullptr, ListViewDefaultStyle | LVS_NOSORTHEADER);
-			view->Init(*lv);
 			m_view.AddPage(*lv, L"Directories", 2, (PVOID)type);
 			break;
 		}
@@ -152,10 +150,13 @@ void CMainFrame::CreateNewTab(TreeNodeType type) {
 
 		case TreeNodeType::DotNet:
 		{
-			auto view = new ManagedTypesView(m_Parser.get());
+			if (!m_Parser->IsCLRMetadataAvailable()) {
+				AtlMessageBox(*this, L"CLR Metadata is not available (probably bad format)", IDR_MAINFRAME, MB_ICONERROR);
+				break;
+			}
+			auto view = new ManagedTypesView(m_Parser.get(), this);
 			auto lv = new CGenericListView(view);
 			lv->Create(m_view, nullptr, nullptr, ListViewDefaultStyle);
-			view->Init(*lv);
 			m_view.AddPage(*lv, L".NET (CLR)", 9, (PVOID)type);
 			break;
 		}
@@ -174,11 +175,11 @@ void CMainFrame::CreateNewTab(TreeNodeType type) {
 			auto view = new StructureView(m_Parser.get(), structProvider);
 			auto lv = new CGenericListView(view, true);
 			lv->Create(m_view, rcDefault, nullptr, ListViewDefaultStyle | LVS_NOSORTHEADER);
-			view->Init(*lv);
 			m_view.AddPage(*lv, structProvider->GetName(), 7, (PVOID)type);
 			break;
 		}
 	}
+	UIEnable(ID_WINDOW_CLOSE, m_view.GetPageCount() > 0);
 }
 
 bool CMainFrame::SwitchToTab(TreeNodeType type) {
@@ -193,11 +194,11 @@ bool CMainFrame::SwitchToTab(TreeNodeType type) {
 	return false;
 }
 
-void CMainFrame::DoFileOpen(PCWSTR path, bool newWindow) {
+bool CMainFrame::DoFileOpen(PCWSTR path, bool newWindow) {
 	auto file = std::make_unique<PEParser>(path);
 	if (!file->IsValid()) {
 		MessageBox(L"Error opening file.", L"PE Explorer", MB_ICONERROR);
-		return;
+		return false;
 	}
 
 	if (!newWindow) {
@@ -219,6 +220,7 @@ void CMainFrame::DoFileOpen(PCWSTR path, bool newWindow) {
 		frame->ShowWindow(SW_SHOWDEFAULT);
 	}
 	AddToRecentFiles(path);
+	return true;
 }
 
 void CMainFrame::AddRecentFiles(bool first) {
@@ -230,7 +232,7 @@ void CMainFrame::AddRecentFiles(bool first) {
 	popup.CreatePopupMenu();
 	int i = 0;
 	for (auto& file : m_RecentFiles) {
-		popup.AppendMenuW(MF_BYCOMMAND, ID_FILE_RECENTFILES + i++, file);
+		popup.AppendMenuW(MF_BYCOMMAND, ATL_IDS_MRU_FILE + i++, file);
 	}
 	menu.GetSubMenu(0).InsertMenu(5, MF_BYPOSITION, popup.Detach(), L"Recent Files");
 	if (m_RecentFiles.size() == 1 || first)
@@ -247,7 +249,7 @@ void CMainFrame::AddToRecentFiles(PCWSTR file) {
 	}
 	else {
 		m_RecentFiles.insert(m_RecentFiles.begin(), file);
-		if (m_RecentFiles.size() > 10)
+		if (m_RecentFiles.size() > 15)
 			m_RecentFiles.pop_back();
 	}
 
@@ -304,10 +306,16 @@ LRESULT CMainFrame::OnWindowClose(WORD /*wNotifyCode*/, WORD /*wID*/, HWND /*hWn
 	if (nActivePage != -1) {
 		auto data = PtrToInt(m_view.GetPageData(nActivePage));
 		m_view.RemovePage(nActivePage);
+		auto it = m_TreeNodes.find(data);
+		ATLASSERT(it != m_TreeNodes.end());
+		if(data >= 0x10000)
+			it->second.Delete();
 		m_TreeNodes.erase(data);
 	}
 	else
 		::MessageBeep((UINT)-1);
+	UIEnable(ID_WINDOW_CLOSE, m_view.GetPageCount() > 0);
+
 	return 0;
 }
 
@@ -323,9 +331,7 @@ LRESULT CMainFrame::OnCreate(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/
 
 	// create command bar window
 	HWND hWndCmdBar = m_CmdBar.Create(m_hWnd, rcDefault, nullptr, ATL_SIMPLE_CMDBAR_PANE_STYLE);
-	// attach menu
 	m_CmdBar.AttachMenu(GetMenu());
-	// remove old menu
 	SetMenu(nullptr);
 	m_CmdBar.m_bAlphaImages = true;
 
@@ -342,6 +348,10 @@ LRESULT CMainFrame::OnCreate(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/
 		{ ID_VIEW_DIRECTORIES, IDI_DIRS },
 		{ ID_VIEW_DOTNET, IDI_COMPONENT },
 		{ ID_OBJECT_VIEWDATA, IDI_VIEW },
+		{ ID_WINDOW_NEW, IDI_NEWWINDOW },
+		{ ID_IMPORTLIB_OPENINNEWWINDOW, IDI_NEWWINDOW },
+		{ ID_FILE_CLOSE, IDI_CLOSE },
+		{ ID_WINDOW_CLOSE, IDI_DELETE },
 	};
 	for (auto& cmd : cmds)
 		m_CmdBar.AddIcon(AtlLoadIcon(cmd.icon), cmd.id);
@@ -368,12 +378,14 @@ LRESULT CMainFrame::OnCreate(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/
 		{ ID_VIEW_IMPORTS, IDI_IMPORTS, 0 },
 		{ ID_VIEW_RESOURCES, IDI_RESOURCES, 0 },
 		{ ID_VIEW_DOTNET, IDI_COMPONENT, 0 },
+		{ 0 },
+		{ ID_WINDOW_CLOSE, IDI_DELETE },
 	};
 	for (auto& b : buttons) {
 		if (b.id == 0)
 			tb.AddSeparator(0);
 		else {
-			int image = tbImages.AddIcon(AtlLoadIcon(b.image));
+			int image = tbImages.AddIcon(AtlLoadIconImage(b.image, 0, 24, 24));
 			tb.AddButton(b.id, b.style, TBSTATE_ENABLED, image, nullptr, 0);
 		}
 	}
@@ -400,7 +412,8 @@ LRESULT CMainFrame::OnCreate(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/
 	images.Create(size, size, ILC_COLOR32, 10, 4);
 	UINT icons[] = {
 		IDI_INFO, IDI_SECTIONS, IDI_DIRS, IDI_EXPORTS, IDI_IMPORTS, IDI_RESOURCES,
-		IDI_FILE_EXE, IDI_FILE_DLL, IDI_HEADERS, IDI_STRUCT, IDI_EXPORT, IDI_COMPONENT
+		IDI_FILE_EXE, IDI_FILE_DLL, IDI_HEADERS, IDI_STRUCT, IDI_EXPORT, IDI_COMPONENT,
+		IDI_CLASS
 	};
 
 	for (auto id : icons)
@@ -415,7 +428,7 @@ LRESULT CMainFrame::OnCreate(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/
 	tabImages.Create(16, 16, ILC_COLOR32, 10, 4);
 	UINT tabicons[] = {
 		IDI_INFO, IDI_SECTIONS, IDI_DIRS, IDI_EXPORTS, IDI_IMPORTS, IDI_RESOURCES, IDI_HEADERS, IDI_STRUCT,
-		IDI_EXPORT, IDI_COMPONENT
+		IDI_EXPORT, IDI_COMPONENT, IDI_CLASS
 	};
 	for (auto id : tabicons)
 		tabImages.AddIcon(AtlLoadIconImage(id, 64, 16, 16));
@@ -434,6 +447,7 @@ LRESULT CMainFrame::OnCreate(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/
 	pLoop->AddIdleHandler(this);
 
 	UpdateUI();
+	UIEnable(ID_WINDOW_CLOSE, FALSE);
 
 	return 0;
 }
@@ -538,7 +552,7 @@ LRESULT CMainFrame::OnWindowActivate(WORD, WORD id, HWND, BOOL&) {
 }
 
 LRESULT CMainFrame::OnRecentFile(WORD, WORD id, HWND, BOOL&) {
-	int index = id - ID_FILE_RECENTFILES;
+	int index = id - ATL_IDS_MRU_FILE;
 	auto path = m_RecentFiles[index];
 	if (path == m_FilePath && m_Parser != nullptr)
 		return 0;
@@ -580,7 +594,7 @@ CTreeItem CMainFrame::CreateAssemblyView(const ExportedSymbol& sym) {
 	auto count = cs_disasm(handle, address, 0x600, m_Parser->GetOptionalHeader64().ImageBase + sym.Address, 0, &insn);
 	if (count > 0) {
 		node = m_TreeNodes[int(TreeNodeType::Exports)].InsertAfter(CString(sym.Name.c_str()), nullptr, 10);
-		auto view = new CAssemblyView(node, insn, static_cast<int>(count));
+		auto view = new CAssemblyView(insn, static_cast<int>(count));
 		view->Create(m_view, rcDefault, nullptr, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN);
 		auto data = (int)TreeNodeType::ExportView + sym.Ordinal;
 		m_view.AddPage(*view, CString(sym.Name.c_str()), 8, IntToPtr(data));
@@ -590,6 +604,30 @@ CTreeItem CMainFrame::CreateAssemblyView(const ExportedSymbol& sym) {
 	}
 
 	cs_close(&handle);
+	return node;
+}
+
+bool CMainFrame::OpenDocument(PCWSTR name, bool newWindow) {
+	return DoFileOpen(name, newWindow);
+}
+
+CTreeItem CMainFrame::CreateTypeMembersView(const ManagedType& type) {
+	size_t data = type.Token + (size_t)TreeNodeType::ManagedTypeMembersView;
+	auto it = m_TreeNodes.find(data);
+	if (it != m_TreeNodes.end()) {
+		SwitchToTab((TreeNodeType)data);
+		return it->second;
+	}
+
+	auto impl = new TypeMembersView(*m_Parser->GetCLRParser(), type);
+	auto view = new CGenericListView(impl, true);
+	auto hWnd = view->Create(m_view, rcDefault, nullptr, ListViewDefaultStyle);
+	m_view.AddPage(hWnd, type.Name + L" Members", 10, (PVOID)data);
+	auto node = m_TreeNodes[int(TreeNodeType::DotNet)].InsertAfter(type.Name, nullptr, 12);
+	m_TreeNodes.insert({ data, node });
+	node.EnsureVisible();
+	node.SetData(data);
+
 	return node;
 }
 
@@ -617,7 +655,7 @@ CTreeItem CMainFrame::CreateHexView(TreeNodeType type, PCWSTR title, LPARAM para
 			else {
 				auto dir = m_Parser->GetDataDirectory(number);
 				ATLASSERT(dir);
-				buffer->SetData(0, (const BYTE*)m_Parser->GetAddress(dir->VirtualAddress), dir->Size);
+				buffer->SetData(0, (const BYTE*) m_Parser->GetAddress(dir->VirtualAddress), dir->Size);
 				bias = dir->VirtualAddress;
 			}
 			int image = sectionView ? 1 : 2;
